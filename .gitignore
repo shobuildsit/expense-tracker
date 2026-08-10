@@ -1,0 +1,36 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+messages_watcher/.env
+
+# Make Blueprints (contain real Webhook/Connection IDs, LINE token, real Spreadsheet ID)
+# Sanitized versions for portfolio viewing live in make/examples/
+make/*.blueprint.json
+make/*.blueprint.example.json
+make/backups/
+
+# Runtime state (dedup tracking, not source)
+messages_watcher/state/
+
+# Real financial data / personal exports — never publish
+*.xlsx
+outputs/
+
+# Internal working reports (contain personal email / real transaction fragments)
+# See Claude_History (outside this repo) for the full record instead.
+REPORT_BOG_SMS_SCENARIO.md
+messages_watcher/REPORT.md
+
+# Claude Code local tool config (contains local absolute paths)
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# make-sync (local API mapping, backups, and raw server exports)
+.make-sync/
