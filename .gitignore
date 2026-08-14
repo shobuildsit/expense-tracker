@@ -18,7 +18,7 @@ messages_watcher/state/
 outputs/
 
 # Internal working reports (contain personal email / real transaction fragments)
-# See Claude_History (outside this repo) for the full record instead.
+# See AI_History (outside this repo) for the full record instead.
 REPORT_BOG_SMS_SCENARIO.md
 messages_watcher/REPORT.md
 

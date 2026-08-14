@@ -1,9 +1,11 @@
 # Architecture
 
-Expense Tracker ingests transactions from multiple sources, normalizes them with an
-LLM, and logs them to a single Google Sheet. A human only steps in once per new
-merchant, to pick a category — after that, repeat purchases from the same merchant
-are filed automatically.
+Expense Tracker ingests transactions from multiple sources, normalizes them, and logs
+them to a single Google Sheet. Normalization uses an LLM only where the source text is
+free-form and ambiguous (Wise emails); the fixed-format Bank of Georgia SMS is parsed
+deterministically with plain text functions, no LLM involved. A human only steps in
+once per new merchant, to pick a category — after that, repeat purchases from the same
+merchant are filed automatically.
 
 ## Overview
 
@@ -24,9 +26,13 @@ flowchart TD
     Y -- no --> YY[Stop: no row,\nno LINE message]
     Y -- yes --> Z{Already logged?}
     Z -- yes --> ZZ[Stop: no row,\nno LINE message]
-    Z -- no --> C[Make: OpenAI parser]
+    Z -- no --> C1[Make: OpenAI parser\nWise only]
+    Z -- no --> C2[Make: deterministic parser\nBOG only]
 
-    C --> D{Known merchant?}
+    C1 --> V{merchant/GEL/JPY\nall extracted?}
+    C2 --> V
+    V -- no --> VV[LINE alert: manual review\nno row added]
+    V -- yes --> D{Known merchant?}
     D -- yes --> E[Add row: Status=Done\ncategory reused]
     D -- no --> F[Add row: Status=Pending]
     F --> G[LINE message:\npick a category]
@@ -44,7 +50,7 @@ flowchart TD
 | `messages_watcher/watcher.py` | Polls the local macOS Messages database (read-only) for new messages from a configured sender and forwards the text to a Make webhook. |
 | Make Scenario 1 — Wise Expense Logger | Watches a Gmail inbox for Wise payment emails, checks the Gmail message ID against `Source Event ID` before parsing, then parses with OpenAI and logs new transactions. |
 | Make Scenario 2 — LINE category handler | Reacts to the category buttons tapped in LINE, updates the matching row, and is shared by every ingestion scenario. When more pending rows remain, it reads the pending count from `Dashboard!Z1` and sends the next category prompt. |
-| Make Scenario 3 — BOG SMS Expense Logger | Receives BOG SMS text (plus the message GUID) via the Custom Webhook, checks the GUID against `Source Event ID` before parsing, then parses with OpenAI and logs new transactions. Same downstream logic as Scenario 1. |
+| Make Scenario 3 — BOG SMS Expense Logger | Receives BOG SMS text (plus the message GUID) via the Custom Webhook, checks the GUID against `Source Event ID` before parsing, then parses the fixed-format SMS deterministically (plain text functions — no LLM) and logs new transactions. Same downstream logic as Scenario 1. |
 | Google Sheets | Single source of truth for logged transactions and the dashboard. `Transactions!J:J` stores stable source event IDs; `Dashboard!Z1` contains the pending-row count used by Scenario 2. |
 
 ## Design notes
@@ -55,8 +61,8 @@ flowchart TD
   scenario — the classification/logging logic is reused as-is.
 - **Event-level deduplication is separate from merchant classification.** Two
   independent checks run per transaction, and they are not the same thing:
-  - *Source Event ID check* (this section's diagram) — before any OpenAI parsing
-    happens, the scenario first confirms the incoming event actually has a stable ID
+  - *Source Event ID check* (this section's diagram) — before any parsing happens
+    (LLM or deterministic), the scenario first confirms the incoming event actually has a stable ID
     (Gmail message ID for Wise, Messages GUID for BOG); if it doesn't, the run stops
     right there rather than risk a blank ID matching the wrong row. If the ID is
     present, it's looked up in the `Source Event ID` column — a match means this
@@ -75,10 +81,19 @@ flowchart TD
   (forwarded as the Source Event ID) are sent to the webhook; other fields it reads
   locally for filtering (e.g. `is_from_me`) and the last processed `ROWID` it keeps as
   state stay on disk and are never sent anywhere.
-- **No new fixed exchange rate unless explicitly needed.** The Wise scenario relies on
-  the email body / model estimate for JPY. The BOG scenario computes JPY with a fixed
-  rate (see [setup.md](setup.md)) since BOG SMS never includes a JPY figure — this is
-  a deliberate, documented exception, not a default behavior.
+- **No new fixed exchange rate unless explicitly needed.** The Wise scenario extracts
+  the JPY figure the email itself states (never estimates it). The BOG scenario
+  computes JPY with a fixed rate (see [setup.md](setup.md)) since BOG SMS never
+  includes a JPY figure — this is a deliberate, documented exception, not a default
+  behavior.
+- **LLM only where the format is genuinely ambiguous.** Wise emails vary in wording
+  and layout, so extraction goes through an LLM with a Structured Output schema — but
+  the schema only asks for `merchant`/`gel`/`jpy`, is nullable so the model can say "not
+  present" instead of guessing, and a dedicated router branch catches incomplete
+  extractions before they reach the sheet (LINE alert, no row added). BOG SMS has a
+  fixed, known structure, so it's parsed with plain Make text functions
+  (`split`/`indexOf`/`substring`) instead — same fail-closed behavior (no match → alert,
+  no row), no LLM call, no per-message API cost.
 
 ## Extending to a new source
 
@@ -86,8 +101,10 @@ To add another input channel (another bank's SMS, a CSV import, a different chat
 platform, etc.):
 
 1. Create a new entry scenario that produces a stable per-event ID (a message ID, a
-   GUID, anything the source itself guarantees is unique) plus raw text → OpenAI
-   parser → `merchant / amount / currency` fields.
+   GUID, anything the source itself guarantees is unique) plus raw text → a parser
+   (LLM if the format is free-form/ambiguous, deterministic text functions if it's
+   fixed-format) → `merchant / amount / currency` fields, with a fail-closed route for
+   incomplete extraction (alert, no row) rather than writing partial/zero data.
 2. Add the same `Source Event ID` presence-check + lookup-and-gate used by Scenarios 1
    and 3 before parsing, so re-delivery from the new source doesn't create duplicate
    rows during normal retries.

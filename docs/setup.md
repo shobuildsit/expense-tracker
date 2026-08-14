@@ -17,9 +17,9 @@ The shipped blueprints expect this exact **A–J** layout:
 | C | `GEL` (or your base currency) | currency | The parsed transaction amount |
 | D | `JPY` (or your target currency) | currency | Converted amount |
 | E | `Merchant` | text | |
-| F | `Category` | dropdown | One of the categories used in the OpenAI prompt (Transport, Food, Cafe, …) |
+| F | `Category` | dropdown | One of the categories offered as LINE quick-reply buttons when a new merchant needs classification (Transport, Food, Cafe, …) |
 | G | `Status` | dropdown | `Pending` / `Done` |
-| H | `Description` | text | Reserved for the OpenAI parser's `description` field. Add the header so the column exists, but note the shipped blueprints do not currently write to it — no scenario maps a value into `Description` yet. |
+| H | `Description` | text | Reserved for future use. Add the header so the column exists, but no scenario currently maps a value into `Description`. |
 | I | `Reserved` | text | Reserved for future use. Keep the header so the native Google Sheets table remains a contiguous A–J range; leave row values blank. |
 | J | `Source Event ID` | text | Stable per-event ID (Gmail message ID for Wise, Messages GUID for BOG). Checked before logging to avoid re-adding the same transaction on a retry/redelivery — see [Idempotency](#idempotency--duplicate-prevention) below. |
 
@@ -51,7 +51,7 @@ There are three scenarios, and they are not interchangeable — each has a disti
 |---|---|---|
 | **Scenario 1 — Wise Expense Logger** | Watches Gmail for Wise payment emails, parses them with OpenAI, checks/records `Source Event ID`, and writes rows to the `Transactions` sheet. | Gmail connection, Google Sheets connection, OpenAI connection. |
 | **Scenario 2 — LINE category handler** | Not an ingestion source — it's the *shared* handler for the "tap a category" flow. Reacts to LINE postback taps, updates the tapped row (`Status=Done`, `Category=<picked>`), then either sends a "all done" confirmation or looks up the next `Pending` row and prompts for it. | LINE connection (Messaging API), Google Sheets connection. Only needed if you use the LINE category-prompt flow at all — i.e. if either Scenario 1 or 3 is active and can produce a `Pending` row. |
-| **Scenario 3 — BOG SMS Expense Logger** | Receives BOG SMS text (forwarded by `messages_watcher` or a direct webhook call) via a Custom Webhook, parses it with OpenAI, checks/records `Source Event ID`, and writes rows to the `Transactions` sheet. | Custom Webhook, Google Sheets connection, OpenAI connection. |
+| **Scenario 3 — BOG SMS Expense Logger** | Receives BOG SMS text (forwarded by `messages_watcher` or a direct webhook call) via a Custom Webhook, parses it deterministically with Make's own text functions (no LLM), checks/records `Source Event ID`, and writes rows to the `Transactions` sheet. | Custom Webhook, Google Sheets connection. No OpenAI connection needed. |
 
 What you need to import depends on which sources you actually use:
 
@@ -89,7 +89,7 @@ Import whichever sanitized blueprint(s) from [`make/examples/`](../make/examples
 }
 ```
 
-`message` is parsed by OpenAI; `guid` is used as the Source Event ID for duplicate
+`message` is parsed deterministically (no OpenAI call); `guid` is used as the Source Event ID for duplicate
 prevention (see below) — make sure your sample payload includes it before running
 "Redetermine data structure", or the dedup lookup module will have nothing to map.
 A sample BOG SMS body (dummy data) is in
@@ -100,14 +100,15 @@ webhook directly with `curl` before wiring up `messages_watcher`.
 
 BOG SMS never includes a JPY amount, so the BOG scenario computes it with a fixed
 rate (`round(gel * 62)` in the shipped blueprint — edit the `62` to your own rate).
-The Wise scenario instead relies on the email body / model estimate, unchanged.
+The Wise scenario instead extracts the JPY amount explicitly stated in the email; it
+never estimates one, and returns null when the amount is missing or unclear.
 
 ### Idempotency / duplicate prevention
 
 Two independent checks run for every incoming transaction, and they do different jobs:
 
-- **Event-level deduplication (`Source Event ID` column).** Before parsing with
-  OpenAI, each scenario checks its `Source Event ID` (the Gmail message ID for Wise,
+- **Event-level deduplication (`Source Event ID` column).** Before parsing (OpenAI
+  for Wise, deterministic text functions for BOG), each scenario checks its `Source Event ID` (the Gmail message ID for Wise,
   the Messages GUID for BOG) against the existing rows in column J. If a match
   exists, the scenario stops silently — no new row, no LINE message, no error. This
   is a check-then-insert pattern: it prevents duplicate rows during normal retries,
@@ -130,7 +131,7 @@ deliberate guard, not an oversight: without it, a missing ID would search column
 this column existed), and either get wrongly treated as a duplicate, or — if no such
 row exists — get logged with a blank `Source Event ID` that would then wrongly match
 *every future* ID-less event. Instead, if the ID is empty, the whole scenario run
-stops right there: no dedup lookup, no OpenAI parsing, no row, no LINE message. This
+stops right there: no dedup lookup, no parsing, no row, no LINE message. This
 is not expected to trigger in normal operation (Gmail and the Messages database always
 provide an ID), but if it ever does, the event is dropped rather than misfiled — check
 that scenario's execution history in Make if a transaction seems to be missing.

@@ -28,7 +28,10 @@ the parsing, deduplication, or category-selection logic. See
 - Gmail transaction ingestion (Wise payment emails)
 - SMS/iMessage transaction ingestion via a local macOS Messages watcher
 - Make.com webhook integration for non-email sources
-- OpenAI-based transaction parsing (merchant, amount, currency, category)
+- Transaction parsing tailored to each source: OpenAI Structured Outputs for
+  free-form Wise emails (merchant, GEL, JPY), deterministic text parsing for the
+  fixed-format BOG SMS (no LLM call) — both fail closed (alert, no row) if a
+  required field can't be extracted, rather than logging a guessed/blank value
 - Event-level duplicate prevention — each transaction carries a stable `Source Event
   ID` (Gmail message ID / Messages GUID), checked before logging to avoid duplicate
   rows during normal retries, redelivery, or a manual re-run
@@ -83,13 +86,15 @@ person's name for P2P Wise payments) through several third-party services. Here 
 what actually happens to it, described plainly rather than as a blanket privacy
 promise:
 
-- **OpenAI** receives the full email body (Wise) or SMS text (BOG) as the parsing
-  prompt's input. The shipped blueprints set the OpenAI module's `store` and
-  `createConversation` options to `false`, so this project does not opt into
-  OpenAI retaining the request as a stored Response object or a persistent
-  conversation thread. This does not change OpenAI's own baseline API data handling
-  (e.g. short-term retention for abuse monitoring), which is outside this project's
-  control — see OpenAI's own API data usage policy if you need specifics.
+- **OpenAI** receives the full email body (Wise only — BOG SMS is parsed
+  deterministically with Make's own text functions and never leaves Make/Google to
+  reach OpenAI) as the parsing prompt's input. The shipped Wise blueprint sets the
+  OpenAI module's `store` and `createConversation` options to `false`, so this
+  project does not opt into OpenAI retaining the request as a stored Response object
+  or a persistent conversation thread. This does not change OpenAI's own baseline
+  API data handling (e.g. short-term retention for abuse monitoring), which is
+  outside this project's control — see OpenAI's own API data usage policy if you
+  need specifics.
 - **Make.com** keeps a scenario execution history (inputs/outputs of every module,
   including the raw email/SMS text and the parsed transaction fields) for a period
   that depends on your Make plan. This project does not clear or disable that
@@ -112,8 +117,9 @@ This is a personal automation project, not a packaged product. It currently assu
 
 - A single user, a single Google Sheet, and a single LINE recipient.
 - Manual start/stop of `messages_watcher` (no daemon/launchd setup included).
-- One bank's SMS format (Bank of Georgia) as the SMS example; adapting the OpenAI
-  prompt for another bank's format is straightforward but not automated.
+- One bank's SMS format (Bank of Georgia) as the SMS example, parsed
+  deterministically against that fixed format; adapting the parser's line/label
+  matching for another bank's format is straightforward but not automated.
 
 ## License
 
