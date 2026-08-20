@@ -1,126 +1,131 @@
-# Expense Tracker
+# Expense Tracker — 複数ソース対応の支出記録自動化
 
-Multi-source expense automation: transactions from email and SMS/iMessage are parsed
-by an LLM, checked against a stable event ID to avoid duplicate rows, and logged to a
-Google Sheet — with known merchants classified automatically and a one-tap LINE
-prompt the first time a new merchant shows up.
+[English](README.en.md)
 
-*(日本語版は [README_ja.md](README_ja.md) をご覧ください)*
+Wiseの決済メールと銀行SMSを取り込み、取引をGoogle Sheetsへ正規化して記録する個人向け支出管理オートメーションです。自由形式のメールだけをAIで解析し、固定形式のSMSは決定的ルールで処理します。未知のマーチャントに限り、LINEで人がカテゴリを選択します。
 
-## Overview
+## 解決する業務課題
 
-Expense Tracker watches multiple input channels for payment notifications and turns
-each one into a normalized row in a shared Google Sheet:
+支出情報がメールとSMSに分散していると、金額・マーチャント・カテゴリを一つの台帳へ転記する作業が繰り返し発生します。一方、単純な自動化には次のリスクがあります。
 
-- **Gmail** — Wise payment confirmation emails
-- **macOS Messages / SMS** — bank SMS notifications (e.g. Bank of Georgia), forwarded
-  via a small local Python poller
-- **Make.com Custom Webhook** — the integration point between the local poller and
-  the parsing/logging automation
+- 自由形式の本文から金額やマーチャントを誤って推測する
+- 再配信や再実行で同じ取引を二重登録する
+- 新しいマーチャントのカテゴリを自動で決めつける
+- 個人の取引情報や接続情報を公開成果物へ混入させる
 
-The design is intentionally source-agnostic: adding a new channel (another bank, a
-CSV import, a different chat platform) means adding a new entry point, not rebuilding
-the parsing, deduplication, or category-selection logic. See
-[`docs/architecture.md`](docs/architecture.md) for how the pieces fit together.
+このプロジェクトは、入力・解析・重複判定・カテゴリ選択を分離し、それぞれに適した安全境界を設けています。
 
-## Features
+## ソリューション
 
-- Gmail transaction ingestion (Wise payment emails)
-- SMS/iMessage transaction ingestion via a local macOS Messages watcher
-- Make.com webhook integration for non-email sources
-- Transaction parsing tailored to each source: OpenAI Structured Outputs for
-  free-form Wise emails (merchant, GEL, JPY), deterministic text parsing for the
-  fixed-format BOG SMS (no LLM call) — both fail closed (alert, no row) if a
-  required field can't be extracted, rather than logging a guessed/blank value
-- Event-level duplicate prevention — each transaction carries a stable `Source Event
-  ID` (Gmail message ID / Messages GUID), checked before logging to avoid duplicate
-  rows during normal retries, redelivery, or a manual re-run
-- Known-merchant classification — separately from the above, merchants that already
-  have a logged transaction get their category reused automatically; genuinely new
-  merchants trigger a one-tap category prompt over LINE
-- Google Sheets as the single source of truth
-- Read-only access to the local Messages database; only the sender, message text, and
-  message GUID are forwarded to the webhook. The watcher also reads other local
-  fields it needs for filtering (e.g. `is_from_me`) and keeps the last processed
-  `ROWID` on disk as state — see [Privacy / data handling](#privacy--data-handling)
+- **Wiseメール:** OpenAI Structured Outputsで `merchant / GEL / JPY` を抽出。値が不明なら `null` を返し、推測しない
+- **BOG SMS:** 固定フォーマットをMakeの文字列関数で決定的に解析し、AIを呼び出さない
+- **重複防止:** Gmail message IDまたはMessages GUIDを `Source Event ID` として記録前に照合
+- **カテゴリ:** 既知マーチャントは過去カテゴリを再利用し、未知の場合だけLINEで人に確認
+- **記録:** Google Sheetsを単一の台帳として使用
+- **失敗時:** 必須値を抽出できなければLINEへ確認通知を送り、推測値や空欄の行は追加しない
 
-## Repository layout
+## システム構成
 
-```text
-expense-tracker/
-├── messages_watcher/      # Local Python poller: macOS Messages → Make webhook
-├── make/
-│   ├── examples/          # Sanitized Make Blueprint exports (safe to inspect/import)
-│   └── *.blueprint.json   # Real blueprints with your own credentials (gitignored)
-├── docs/
-│   ├── architecture.md
-│   └── setup.md
-├── samples/
-│   └── sample_bog_sms.txt # Dummy SMS payload for testing
-└── README.md
+```mermaid
+flowchart LR
+    A[Wise payment email] --> C[Gmail trigger]
+    B[Bank SMS] --> D[macOS Messages watcher]
+    D --> E[Make webhook]
+    C --> F{Source Event ID}
+    E --> F
+    F -->|duplicate / missing| X[Stop]
+    F -->|new| G{Parser}
+    G -->|Wise| H[OpenAI structured extraction]
+    G -->|BOG| I[Deterministic text parsing]
+    H --> J{Required values present?}
+    I --> J
+    J -->|no| K[LINE review alert / no row]
+    J -->|yes| L{Known merchant?}
+    L -->|yes| M[Reuse category]
+    L -->|no| N[LINE category selection]
+    M --> O[(Google Sheets)]
+    N --> O
 ```
 
-## Getting started
+モジュール単位の構成と拡張方法は[アーキテクチャ](docs/architecture.md)に記載しています。
 
-See [`docs/setup.md`](docs/setup.md) for the full setup guide (Google Sheets layout,
-importing the Make blueprints, configuring `messages_watcher`, and an end-to-end
-test using `curl`).
+## AI・決定的ルール・人の責任分担
 
-## Security
+| 担当 | 役割 |
+|---|---|
+| AI | 自由形式のWiseメールから、本文に明記されたマーチャント・GEL・JPYだけを構造化抽出 |
+| 決定的ルール | BOG SMS解析、必須値検証、Source Event ID照合、既知カテゴリ再利用、Sheets行の追加・更新 |
+| 人 | 未知マーチャントのカテゴリ選択、解析失敗通知の確認、接続先と実データの管理 |
 
-- The local Messages database (`chat.db`) is opened **read-only**
-  (`mode=ro`); `messages_watcher` never writes to it.
-- Webhook URLs, API keys, and connection details live in `.env` files that are never
-  committed — see `messages_watcher/.env.example` for the expected shape.
-- Real financial data, spreadsheet exports, and the live Make Blueprints (which
-  contain your actual webhook/connection IDs) are excluded from this repository.
-  `make/examples/` ships sanitized versions with all IDs and tokens replaced by
-  placeholders, for reference only.
-- No personal data (email addresses, phone numbers, real transactions) is included in
-  this repository.
+AIはBOG SMSの解析、重複判定、カテゴリ確定には使いません。Wiseメールでも、入力に存在しない金額やマーチャントを補完する設計ではありません。
 
-## Privacy / data handling
+## 信頼性と安全性
 
-This project moves real transaction data (merchant names, amounts, sometimes a
-person's name for P2P Wise payments) through several third-party services. Here is
-what actually happens to it, described plainly rather than as a blanket privacy
-promise:
+- Source Event IDがない入力は、誤照合を避けるため処理を停止します。
+- 同じSource Event IDが既にある場合は、解析・行追加・LINE通知へ進みません。
+- 必須値が欠けた場合はfail closedとし、行を追加しません。
+- macOS Messages DBはSQLiteの `mode=ro` で読み取り専用アクセスします。
+- OpenAIモジュールは `store: false` / `createConversation: false` です。
+- 公開Blueprintは接続ID、Webhook ID、Spreadsheet ID、LINEトークン、送信先IDをプレースホルダーへ置換しています。
 
-- **OpenAI** receives the full email body (Wise only — BOG SMS is parsed
-  deterministically with Make's own text functions and never leaves Make/Google to
-  reach OpenAI) as the parsing prompt's input. The shipped Wise blueprint sets the
-  OpenAI module's `store` and `createConversation` options to `false`, so this
-  project does not opt into OpenAI retaining the request as a stored Response object
-  or a persistent conversation thread. This does not change OpenAI's own baseline
-  API data handling (e.g. short-term retention for abuse monitoring), which is
-  outside this project's control — see OpenAI's own API data usage policy if you
-  need specifics.
-- **Make.com** keeps a scenario execution history (inputs/outputs of every module,
-  including the raw email/SMS text and the parsed transaction fields) for a period
-  that depends on your Make plan. This project does not clear or disable that
-  history — treat it as a place real transaction data can persist.
-- **Google Sheets** is the permanent store: each logged transaction (`ID`, `Date`,
-  amounts, `Merchant`, `Category`, `Status`, `Source Event ID`) stays in your
-  spreadsheet until you delete it yourself.
-- **LINE** notifications sent to you contain the merchant name and amount for
-  merchants that need a category pick; these appear in your own chat history with
-  your LINE bot and are not sent to anyone else.
-- **`messages_watcher` locally** reads more from `chat.db` than it forwards: besides
-  the sender, message text, and GUID sent to the webhook, it also reads fields like
-  `is_from_me` to apply the sender/filter conditions, and keeps the last processed
-  `ROWID` in a local state file (`messages_watcher/state/`, gitignored) so it knows
-  where to resume. None of that local-only data is sent anywhere.
+ただし、Source Event IDの重複防止は「確認してから追加する」アプリケーションレベルの方式です。同一イベントが完全に同時実行された場合のatomicな一意性は保証しません。
 
-## Scope / non-goals
+## 証拠と検証範囲
 
-This is a personal automation project, not a packaged product. It currently assumes:
+このリポジトリで再実行できる公開成果物の検証:
 
-- A single user, a single Google Sheet, and a single LINE recipient.
-- Manual start/stop of `messages_watcher` (no daemon/launchd setup included).
-- One bank's SMS format (Bank of Georgia) as the SMS example, parsed
-  deterministically against that fixed format; adapting the parser's line/label
-  matching for another bank's format is straightforward but not automated.
+```bash
+python3 tests/validate_public_repo.py
+```
 
-## License
+検証スクリプトは、3つのBlueprintのJSON妥当性と構造、安全設定、プレースホルダー、秘密情報らしき文字列、ローカルwatcherの構文、必須ドキュメントを確認します。外部APIや実アカウントは操作しません。
 
-[MIT](LICENSE)
+別途記録されたライブ確認では、合成Wiseメールによる新規マーチャント経路と、LINEカテゴリ選択からSheets更新までの経路が観測されています。一方、現行BOG決定的パーサーの全経路、同一IDのライブ再送、Gmailの自然なスケジュール起動には未検証項目があります。
+
+観測事実と `EVIDENCE_GAP` の正確な区分は[証拠記録](docs/evidence.md)を参照してください。
+
+## 技術構成
+
+- Make.com
+- Google Sheets / Gmail
+- OpenAI Responses API（Structured Outputs、Wiseのみ）
+- LINE Messaging API
+- Python 3（macOS Messages watcher、公開成果物検証）
+- macOS Messages SQLite DB（読み取り専用）
+
+## リポジトリの主な内容
+
+- [`make/examples/`](make/examples/) — サニタイズ済みMake Blueprint 3件
+- [`messages_watcher/`](messages_watcher/) — macOS MessagesからMake Webhookへ転送するローカルpoller
+- [`docs/architecture.md`](docs/architecture.md) — システム構成と設計判断
+- [`docs/setup.md`](docs/setup.md) — Google Sheets、Make、watcherの設定手順
+- [`docs/evidence.md`](docs/evidence.md) — ライブ観測と未検証範囲
+- [`docs/limitations.md`](docs/limitations.md) — 制約と非目標
+- [`SECURITY.md`](SECURITY.md) — 公開・実行時のセキュリティ境界
+- [`samples/sample_bog_sms.txt`](samples/sample_bog_sms.txt) — 架空データのSMSサンプル
+
+## セットアップ
+
+[セットアップ手順](docs/setup.md)に、Google SheetsのA–J列契約、3つのMakeシナリオ、Webhookペイロード、LINE連携、watcher、合成データによる確認手順を記載しています。
+
+## プライバシー
+
+実行時の取引データは複数サービスを通ります。
+
+- Wiseメール本文は解析のためOpenAIへ送信されます。BOG SMSはOpenAIへ送りません。
+- Make.comの実行履歴には各モジュールの入出力が残る場合があります。
+- Google Sheetsは取引の恒久的な保存先です。
+- LINEには、カテゴリ確認時のマーチャント名と金額、または解析失敗通知が送られます。
+- watcherは送信者、本文、GUIDをWebhookへ送り、`is_from_me` と最終ROWIDなどの補助情報はローカルだけで使います。
+
+保存期間や第三者サービスの設定を含む詳細は[セキュリティ方針](SECURITY.md)を確認してください。
+
+## 現在の制約
+
+このプロジェクトは本番運用可能、厳密なexactly-once、または事業ROIを主張していません。単一ユーザー・単一Sheets・単一LINE通知先を前提とし、watcherは手動起動です。BOGのJPY換算はBlueprint内の固定レートで、実勢レートへの自動追従はありません。
+
+完全な一覧は[制約事項](docs/limitations.md)を参照してください。
+
+## ライセンス
+
+[MIT License](LICENSE)
