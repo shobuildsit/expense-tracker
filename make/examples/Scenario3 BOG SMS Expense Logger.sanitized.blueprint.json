@@ -481,7 +481,7 @@
       "mapper": {
         "name": "GELRaw",
         "scope": "roundtrip",
-        "value": "{{if(indexOf(trim(get(10.Lines; 1)); \"გადახდა:\") = -1; \"\"; if(indexOf(trim(get(10.Lines; 1)); \"GEL\") = -1; \"\"; parseNumber(trim(substring(trim(get(10.Lines; 1)); indexOf(trim(get(10.Lines; 1)); \"GEL\") + 3; length(trim(get(10.Lines; 1))))); \".\")))}}"
+        "value": "{{if(indexOf(trim(get(10.Lines; 1)); \"GEL\") = -1; \"\"; if(indexOf(trim(get(10.Lines; 1)); \"გადახდა:\") = -1; if(indexOf(trim(get(10.Lines; 1)); \"Purchase:\") = -1; \"\"; parseNumber(trim(substring(trim(get(10.Lines; 1)); indexOf(trim(get(10.Lines; 1)); \"GEL\") + 3; length(trim(get(10.Lines; 1))))); \".\")); parseNumber(trim(substring(trim(get(10.Lines; 1)); indexOf(trim(get(10.Lines; 1)); \"GEL\") + 3; length(trim(get(10.Lines; 1))))); \".\")))}}"
       },
       "module": "util:SetVariable2",
       "version": 1,

@@ -97,9 +97,10 @@ The public checkout includes an automated structural and publishing-safety valid
 python3 tests/validate_public_repo.py
 ```
 
-Recorded live checks cover one manual Wise new-merchant path and one LINE webhook
-category-update path. They do **not** prove scheduled Gmail ingestion, atomic
-exactly-once behavior, or the current BOG deterministic parser across every route.
+Recorded live checks cover one manual Wise new-merchant path, one LINE webhook
+category-update path, four backfilled English-format BOG SMS events, and one
+same-GUID duplicate stop. They do **not** prove scheduled Gmail ingestion, atomic
+exactly-once behavior, or the BOG parser across every format and route.
 See [`docs/evidence.md`](docs/evidence.md) for the exact observations and explicit
 `EVIDENCE_GAP` items.
 

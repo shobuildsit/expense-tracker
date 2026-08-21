@@ -46,11 +46,22 @@ This run did not replay the same Gmail message ID, so it does not prove live ded
 
 This run did not test double taps or webhook replay.
 
+### BOG English-format recovery — observed 2026-08-21
+
+- Trigger method: four previously unprocessed macOS Messages events were replayed one at a time with their original GUIDs after the Make scenario was restored.
+- Parser input format: the first line used `Purchase: GEL...`; the parser was updated to accept that label while retaining the existing Georgian payment label.
+- Make result: four successful executions with 8 operations each.
+- Google Sheets result: four `Done` rows were added, each with a Source Event ID; the total row count increased by exactly four.
+- Duplicate check: one of the GUIDs was deliberately replayed again. Make stopped it after the Source Event ID lookup with 2 operations, and no second row was added.
+- Final state: no duplicate Source Event IDs, no DLQ items, and the BOG scenario was active and valid.
+
+The backfilled rows use the processing date because the scenario maps `Date` from `now`; their original SMS receipt dates remain operational evidence rather than a separate sheet column.
+
 ## Evidence gaps
 
-- **EVIDENCE_GAP — current BOG deterministic parser:** the published structure and fail-closed routes are statically validated, but a final clean end-to-end run of the current deterministic parser across valid, invalid, known-merchant, new-merchant, and duplicate-GUID cases is not published or claimed here.
+- **EVIDENCE_GAP — remaining BOG routes:** the English-format known-merchant and duplicate-GUID paths were observed live, but the Georgian format, invalid extraction, and new-merchant/LINE paths were not re-run in the 2026-08-21 recovery.
 - **EVIDENCE_GAP — scheduled Wise trigger:** the recorded Wise run used manual `Run once`; natural scheduled Gmail polling was not verified in that check.
-- **EVIDENCE_GAP — live duplicate replay:** Source Event ID filters are present, but the current public evidence does not include a deliberate replay of the same Gmail message ID or Messages GUID.
+- **EVIDENCE_GAP — Gmail duplicate replay:** a Messages GUID replay was observed and stopped, but the same Gmail message ID has not been deliberately replayed live.
 - **EVIDENCE_GAP — concurrent execution:** the check-then-insert design is not an atomic uniqueness guarantee and has not been load-tested for simultaneous duplicate events.
 - **EVIDENCE_GAP — watcher regression suite:** the public validator checks Python syntax and static safety properties; the watcher has no automated unit or macOS integration suite in this repository.
 - **EVIDENCE_GAP — public UI evidence:** no account-redacted Make, Sheets, or LINE screenshots are currently published.

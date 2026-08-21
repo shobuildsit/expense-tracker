@@ -101,6 +101,8 @@ def main() -> int:
         bog_text = json.dumps(bog, ensure_ascii=False)
         check(not any("openai" in item.lower() for item in bog_types), "BOG Blueprint contains no OpenAI module")
         check("parseNumber(" in bog_text, "BOG Blueprint uses deterministic numeric parsing")
+        check('\\"გადახდა:\\"' in bog_text, "BOG parser accepts the Georgian payment label")
+        check('\\"Purchase:\\"' in bog_text, "BOG parser accepts the English payment label")
         check("escapeJSON(1.message)" in bog_text, "BOG failure alert escapes the raw message")
         check("{{1.guid}}" in bog_text, "BOG Blueprint maps the Messages GUID as source identity")
 
